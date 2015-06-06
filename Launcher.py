@@ -432,23 +432,30 @@ def render_bar(x, y, total_width, name, value, maximum, bar_color, back_color):
 
     #render the background first
     #libtcod.console_set_default_background(panel, back_color)
-    panel.setColors(bg=back_color)
+    #panel.setColors(bg=back_color) # not used if there's no printStr call
     #libtcod.console_rect(panel, x, y, total_width, 1, False, libtcod.BKGND_SCREEN)
-    panel.drawRect(x, y, total_width, 1, None)
+    panel.drawRect(x, y, total_width, 1, None, None, back_color)
 
     #now render the bar on top
     #libtcod.console_set_default_background(panel, bar_color)
-    panel.setColors(bg=bar_color)
+    #panel.setColors(bg=bar_color)
     if bar_width > 0:
         #libtcod.console_rect(panel, x, y, bar_width, 1, False, libtcod.BKGND_SCREEN)
-        panel.drawRect(x, y, bar_width, 1, None)
+        panel.drawRect(x, y, bar_width, 1, None, None, bar_color)
 
     #finally, some centered text with the values
     #libtcod.console_set_default_foreground(panel, libtcod.white)
-    panel.setColors(fg=[255,255,255])
+    #panel.setColors(fg=[255,255,255])
     #libtcod.console_print_ex(panel, x + total_width / 2, y, libtcod.BKGND_NONE, libtcod.CENTER,
      #   name + ': ' + str(value) + '/' + str(maximum))
-    panel.printStr(name + ": " + str(value) + '/' + str(maximum))
+    #panel.printStr(name + ": " + str(value) + '/' + str(maximum))
+    
+    # prepare the text using old-style Python string formatting
+    text = "%s: %i/%i" % (name, value, maximum)
+    # then get a string spanning the entire bar with the text centered
+    text = text.center(total_width)
+    # render this text over the bar while preserving the background color
+    panel.drawStr(x, y, text, [255,255,255], None)
 
 def player_move_or_attack(dx, dy):
     global fov_recompute
