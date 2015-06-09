@@ -3,6 +3,7 @@ __author__ = 'Toni'
 import tdl
 from random import randint
 import math
+import textwrap
 
 SCREEN_WIDTH = 80
 SCREEN_HEIGHT = 65
@@ -17,10 +18,17 @@ MAP_HEIGHT = 50
 BAR_WIDTH = 20
 PANEL_HEIGHT = 7
 PANEL_Y = SCREEN_HEIGHT - PANEL_HEIGHT
+MSG_X = BAR_WIDTH + 2
+MSG_WIDTH = SCREEN_WIDTH - BAR_WIDTH - 2
+MSG_HEIGHT = PANEL_HEIGHT - 1
+
+INVENTORY_WIDTH = 50
 
 LIMIT_FPS = 20
 playerX = SCREEN_WIDTH/2
 playerY = SCREEN_HEIGHT/2
+
+MOUSE_COORD = {'x':0, 'y':0}
 
 console = tdl.init(SCREEN_WIDTH, SCREEN_HEIGHT, title = "Roguelike")
 panel = tdl.Console(SCREEN_WIDTH, PANEL_HEIGHT)
@@ -30,12 +38,14 @@ tdl.setFPS(LIMIT_FPS)
 ROOM_MAX_SIZE = 10
 ROOM_MIN_SIZE = 6
 MAX_ROOMS = 30
+MAX_ROOM_ITEMS = 2
 
 fov_recompute = False
 
 FOV_ALGO = 0  #default FOV algorithm
 FOV_LIGHT_WALLS = True
 TORCH_RADIUS = 10
+HEAL_AMOUNT = 4
 
 color_dark_wall = [0, 0, 100]
 color_light_wall = [130, 110, 50]
@@ -45,6 +55,7 @@ color_yellow = [255, 255, 0]
 color_green = [0, 255, 0]
 color_dark_green = [0, 153, 0]
 color_dark_red = [204, 0, 0]
+color_violet = [255, 0, 255]
 
 game_state = 'playing'
 player_action = None
@@ -109,6 +120,12 @@ class Fighter:
         else:
             print (self.owner.name.capitalize() + ' attacks ' + target.name + ' but it has no effect!')
 
+    def heal(self, amount):
+        #heal by the given amount, without going over the maximum
+        self.hp += amount
+        if self.hp > self.max_hp:
+            self.hp = self.max_hp
+
 class BasicMonster:
     #AI for a basic monster.
     def take_turn(self):
@@ -130,7 +147,7 @@ class BasicMonster:
 class GameObject:
     # this is a generic object: the player, a monster, an item, the stairs...
     # it's always represented by a character on screen.
-    def __init__(self, x, y, char, name, color, blocks=False, fighter=None, ai=None):
+    def __init__(self, x, y, char, name, color, blocks=False, fighter=None, ai=None, item=None):
         self.name = name
         self.blocks = blocks
         self.x = x
@@ -145,6 +162,10 @@ class GameObject:
         self.ai = ai
         if self.ai:  #let the AI component know who owns it
             self.ai.owner = self
+
+        self.item = item
+        if self.item:  #let the Item component know who owns it
+            self.item.owner = self
 
     def move(self, dx, dy):
         #move by the given amount, if the destination is not blocked
@@ -186,6 +207,27 @@ class GameObject:
         objects.remove(self)
         objects.insert(0, self)
 
+class Item:
+    #an item that can be picked up and used.
+    def __init__(self, use_function=None):
+        self.use_function = use_function
+
+    def pick_up(self):
+        #add to the player's inventory and remove from the map
+        if len(inventory) >= 26:
+            message('Your inventory is full, cannot pick up ' + self.owner.name + '.', color_dark_red)
+        else:
+            inventory.append(self.owner)
+            objects.remove(self.owner)
+            message('You picked up a ' + self.owner.name + '!', color_green)
+    def use(self):
+        #just call the "use_function" if it is defined
+        if self.use_function is None:
+            message('The ' + self.owner.name + ' cannot be used.')
+        else:
+            if self.use_function() != 'cancelled':
+                inventory.remove(self.owner)  #destroy after use, unless it was cancelled for some reason
+
 
 
 def create_room(room):
@@ -214,8 +256,8 @@ def place_objects(room):
 
     for i in range(num_monsters):
         #choose random spot for this monster
-        x = randint(room.x1, room.x2)
-        y = randint(room.y1, room.y2)
+        x = randint(room.x1+1, room.x2-1)
+        y = randint(room.y1+1, room.y2-1)
 
         #only place it if the tile is not blocked
         if not is_blocked(x, y):
@@ -229,6 +271,25 @@ def place_objects(room):
                 monster = GameObject(x, y, 'I', 'troll', color_dark_green, blocks=True, fighter=fighter_component, ai=ai_component)
 
             objects.append(monster)
+     #choose random number of items
+    #num_items = libtcod.random_get_int(0, 0, MAX_ROOM_ITEMS)
+    num_items = randint(0, MAX_ROOM_ITEMS)
+
+    for i in range(num_items):
+        #choose random spot for this item
+        #x = libtcod.random_get_int(0, room.x1+1, room.x2-1)
+        #y = libtcod.random_get_int(0, room.y1+1, room.y2-1)
+        x = randint(room.x1+1, room.x2-1)
+        y = randint(room.y1+1, room.y2-1)
+
+        #only place it if the tile is not blocked
+        if not is_blocked(x, y):
+            #create a healing potion
+            item_component = Item(use_function=cast_heal)
+            item = GameObject(x, y, '!', 'healing potion', color_violet, item=item_component)
+
+            objects.append(item)
+            item.send_to_back()  #items appear below other objects
 
 def create_h_tunnel(x1, x2, y):
     global map
@@ -358,11 +419,27 @@ def monster_death(monster):
     monster.name = 'remains of ' + monster.name
     monster.send_to_back()
 
+
+
+def cast_heal():
+    #heal the player
+    if player.fighter.hp == player.fighter.max_hp:
+        message('You are already at full health.', color_dark_red)
+        return 'cancelled'
+
+    message('Your wounds start to feel better!', color_violet)
+    player.fighter.heal(HEAL_AMOUNT)
+
 global visible_tiles
 fighter_component = Fighter(hp=30, defense=2, power=5, death_function=player_death)
 player = GameObject(0, 0, '@', 'player', [255, 255, 255], blocks=True, fighter=fighter_component)
 
+#create the list of game messages and their colors, starts empty
+game_msgs = []
+
+
 objects = [player]
+inventory = []
 
 #generate map (at this point it's not drawn to the screen)
 make_map()
@@ -417,9 +494,29 @@ def render_all():
     #libtcod.console_clear(panel)
     panel.clear()
 
+    #print the game messages, one line at a time
+    y = 1
+    for (line, color) in game_msgs:
+        #libtcod.console_set_default_foreground(panel, color)
+        #libtcod.console_print_ex(panel, MSG_X, y, libtcod.BKGND_NONE, libtcod.LEFT, line)
+
+        text = "%s" % (line)
+        # then get a string spanning the entire bar with the text centered
+        text = text.center(MSG_X)
+        # render this text over the bar while preserving the background color
+        panel.drawStr(MSG_X, y, text, [255,255,255], None)
+
+        y += 1
+
     #show the player's stats
     render_bar(1, 1, BAR_WIDTH, 'HP', player.fighter.hp, player.fighter.max_hp,
         color_dark_red, color_yellow)
+
+    #libtcod.console_print_ex(panel, 1, 0, libtcod.BKGND_NONE, libtcod.LEFT, get_names_under_mouse())
+    mouse_message = get_names_under_mouse()
+    mouse_message = "%s" % (mouse_message)
+    mouse_message = mouse_message.center(1)
+    panel.drawStr(1, 0, mouse_message, [255, 255, 255], None)
 
     #blit the contents of "panel" to the root console
     #libtcod.console_blit(panel, 0, 0, SCREEN_WIDTH, PANEL_HEIGHT, 0, 0, PANEL_Y)
@@ -449,13 +546,100 @@ def render_bar(x, y, total_width, name, value, maximum, bar_color, back_color):
     #libtcod.console_print_ex(panel, x + total_width / 2, y, libtcod.BKGND_NONE, libtcod.CENTER,
      #   name + ': ' + str(value) + '/' + str(maximum))
     #panel.printStr(name + ": " + str(value) + '/' + str(maximum))
-    
+
     # prepare the text using old-style Python string formatting
     text = "%s: %i/%i" % (name, value, maximum)
     # then get a string spanning the entire bar with the text centered
     text = text.center(total_width)
+
     # render this text over the bar while preserving the background color
     panel.drawStr(x, y, text, [255,255,255], None)
+
+def get_names_under_mouse():
+
+    #return a string with the names of all objects under the mouse
+    (x, y) = (MOUSE_COORD['x'], MOUSE_COORD['y'])
+
+    #create a list with the names of all objects at the mouse's coordinates and in FOV
+    names = [obj.name for obj in objects
+        if obj.x == x and obj.y == y and (x, y) in visible_tiles]
+
+    names = ', '.join(names)  #join the names, separated by commas
+    return names.capitalize()
+
+def message(new_msg, color = [255, 255, 255]):
+    #split the message if necessary, among multiple lines
+    new_msg_lines = textwrap.wrap(new_msg, MSG_WIDTH)
+
+    for line in new_msg_lines:
+        #if the buffer is full, remove the first line to make room for the new one
+        if len(game_msgs) == MSG_HEIGHT:
+            del game_msgs[0]
+
+        #add the new line as a tuple, with the text and the color
+        game_msgs.append( (line, color) )
+
+def menu(header, options, width):
+    if len(options) > 26: raise ValueError('Cannot have a menu with more than 26 options.')
+    #calculate total height for the header (after auto-wrap) and one line per option
+    #header_height = libtcod.console_get_height_rect(con, 0, 0, width, SCREEN_HEIGHT, header)
+
+    header_height = 1
+
+    height = len(options) + header_height
+
+    #create an off-screen console that represents the menu's window
+    window = tdl.Console(width, height)
+
+    #print the header, with auto-wrap
+    #libtcod.console_set_default_foreground(window, libtcod.white)
+    window.setColors(fg = [255, 255, 255])
+    #libtcod.console_print_rect_ex(window, 0, 0, width, height, libtcod.BKGND_NONE, libtcod.LEFT, header)
+
+    text = '%s' % (header)
+    text = text.ljust(height)
+    window.drawStr(0, 0, text)
+
+    #print all the options
+    y = header_height
+    letter_index = ord('a')
+    for option_text in options:
+        text = '(' + chr(letter_index) + ') ' + option_text
+        #libtcod.console_print_ex(window, 0, y, libtcod.BKGND_NONE, libtcod.LEFT, text)
+        text = '%s' % (text)
+        text = text.ljust(height)
+        window.drawStr(0, y, text)
+
+        y += 1
+        letter_index += 1
+    #blit the contents of "window" to the root console
+    x = SCREEN_WIDTH/2 - width/2
+    y = SCREEN_HEIGHT/2 - height/2
+    #libtcod.console_blit(window, 0, 0, width, height, 0, x, y, 1.0, 0.7)
+    #console.blit(window, 0, 0, width, height,x, y)
+    console.blit(window, x, y, width, height, 0, 0)
+    #present the root console to the player and wait for a key-press
+    tdl.flush()
+    #key = libtcod.console_wait_for_keypress(True)
+    key = tdl.event.keyWait()
+
+    #convert the ASCII code to an index; if it corresponds to an option, return it
+    index = ord(key.char) - ord('a')
+    if index >= 0 and index < len(options): return index
+    return None
+
+def inventory_menu(header):
+    #show a menu with each item of the inventory as an option
+    if len(inventory) == 0:
+        options = ['Inventory is empty.']
+    else:
+        options = [item.name for item in inventory]
+
+    index = menu(header, options, INVENTORY_WIDTH)
+
+    #if an item was chosen, return it
+    if index is None or len(inventory) == 0: return None
+    return inventory[index].item
 
 def player_move_or_attack(dx, dy):
     global fov_recompute
@@ -480,10 +664,63 @@ def player_move_or_attack(dx, dy):
 
 def handle_keys():
     global fov_recompute
-    user_input = tdl.event.keyWait()
-    if user_input.key == 'ESCAPE':
-            return 'exit'
-    if game_state == 'playing':
+    user_input = tdl.event.get()
+
+    #if user_input.key == 'ESCAPE':
+    for event in user_input:
+        #print(str(event))
+        if event.type == 'KEYDOWN':
+            if event.key == 'ESCAPE':
+                return 'exit'
+        if game_state == 'playing':
+            if event.type == 'KEYDOWN':
+                if event.key == 'UP':
+                    player_move_or_attack(0, -1)
+                    fov_recompute = True
+                    return 'took-turn'
+                elif event.key == 'DOWN':
+                    player_move_or_attack(0, 1)
+                    fov_recompute = True
+                    return 'took-turn'
+                elif event.key == 'LEFT':
+                    player_move_or_attack(-1, 0)
+                    fov_recompute = True
+                    return 'took-turn'
+                elif event.key == 'RIGHT':
+                    player_move_or_attack(1, 0)
+                    fov_recompute = True
+                    return 'took-turn'
+                else:
+                    key_char = event.keychar
+                    if key_char == 'g':
+                    #pick up an item
+                        for object in objects:  #look for an item in the player's tile
+                            if object.x == player.x and object.y == player.y and object.item:
+                                object.item.pick_up()
+                                break
+                        return 'took_turn'
+                    if key_char == 'i':
+                        #show the inventory
+                        chosen_item = inventory_menu('Inventory')
+                        if chosen_item is not None:
+                            chosen_item.use()
+
+            elif event.type == 'MOUSEMOTION':
+                coord = event.cell
+                MOUSE_COORD['x'] = coord[0]
+                MOUSE_COORD['y'] = coord[1]
+                #create a list with the names of all objects at the mouse's coordinates and in FOV
+
+
+            else:
+                return 'didnt-take-turn'
+        else:
+            return 'didnt-take-turn'
+
+    return 'didnt-take-turn'
+    #if user_input.contains('ESCAPE'):
+            #return 'exit'
+    '''if game_state == 'playing':
         if user_input.key == 'UP':
             player_move_or_attack(0, -1)
             fov_recompute = True
@@ -497,7 +734,7 @@ def handle_keys():
             player_move_or_attack(1, 0)
             fov_recompute = True
         else:
-            return 'didnt-take-turn'
+            return 'didnt-take-turn'''''
 
 
 
@@ -509,8 +746,14 @@ for y in range(MAP_HEIGHT):
         pass
 
 fov_recompute = True
+tdl.setFPS(LIMIT_FPS)
+
+#a warm welcoming message!
+message('Welcome stranger! Prepare to perish in the Tombs of the Ancient Kings.', color_dark_red)
+
 while not tdl.event.isWindowClosed():
     #render the screen
+    #all_events = tdl.event.get()
     render_all()
 
     tdl.flush()
@@ -519,7 +762,7 @@ while not tdl.event.isWindowClosed():
         obj.clear()
 
     player_action = handle_keys()
-
+    #print(player_action)
     if player_action == 'exit':
         break;
 
